@@ -1,0 +1,11 @@
+ai2thor>=5.0.0
+numpy
+Pillow
+openai
+PyYAML
+scikit-image
+matplotlib
+
+# Optional: LPIPS perceptual similarity (compute_similarity.py)
+# torch
+# lpips

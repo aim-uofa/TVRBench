@@ -1,0 +1,57 @@
+### model
+model_name_or_path: /path/to/Qwen3.5-9B
+# 640×360 = 230,400 < 262,144 → LLaMA-Factory's _regularize_images will NOT
+# pre-downscale. Images pass through to Qwen processor at native render size,
+# matching the online RL pipeline (which has no max_pixels override either).
+image_max_pixels: 262144
+trust_remote_code: true
+
+### method
+stage: sft
+do_train: true
+finetuning_type: full
+freeze_vision_tower: true
+
+### dataset
+# Each row is ONE multi-turn trajectory (vs no_concat's per-step samples).
+# Built by scripts/build_sft_online_data.py — byte-identical user template to
+# tvrbench.online_rl.thor_view_env._build_obs_str.
+dataset: tvrbench_sft_online
+# HDD path — shared across H100/H200. Migrated from SSD after H100 OOMed
+# at cutoff=16K + Z3 (80GB borderline). Training now on H200C (141GB), so we
+# need HDD for cross-box access. ~5-10 GB total, IO is fine on HDD.
+dataset_dir: /path/to/tvr-sft-va
+template: qwen3_5
+# Real token measurement via scripts/probe_longest_sample.py:
+#   max sample = 13249 tokens (52 image × 220 + 1809 text, idx 942, procthor hard)
+# Online RL's max_response_length is 24576 but those are DIFFERENT params —
+# verl bounds the response sequence, LF bounds the post-tokenize sample.
+# We just need cutoff ≥ max real sample. 16384 = 2^14, leaves ~3K safety buffer.
+cutoff_len: 16384
+preprocessing_num_workers: 16
+dataloader_num_workers: 4
+
+### output
+output_dir: /path/to/output/checkpoints
+logging_steps: 10
+save_strategy: epoch
+plot_loss: true
+overwrite_output_dir: true
+save_only_model: true
+report_to: none
+
+### train
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 8
+# Concat mode has ~10× fewer samples than no_concat (1600 traj vs 20k per-step).
+# Compensate with more epochs; total optimization steps ≈ 5×200 = 1000.
+learning_rate: 1.0e-5
+num_train_epochs: 5.0
+lr_scheduler_type: cosine
+warmup_ratio: 0.1
+bf16: true
+ddp_timeout: 180000000
+# ZeRO-2: 4×H200 141GB has plenty of headroom for 9B + cutoff=16K. Z3 was
+# needed on 4×H100 80G but is 30-50% slower; revert to Z2 on H200 for speed.
+deepspeed: ds_z2_config.json
+gradient_checkpointing: true

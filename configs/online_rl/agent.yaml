@@ -1,0 +1,46 @@
+# Agent-loop registry for hydra.utils.instantiate (see verl
+# `actor_rollout_ref.rollout.agent.agent_loop_config_path`).
+#
+# Each entry is a dict whose `_target_` is the AgentLoopBase subclass FQDN and
+# whose remaining fields are constructor kwargs (Hydra binds them by name).
+# Verl injects the standard kwargs (trainer_config, server_manager, tokenizer,
+# processor, dataset_cls, data_config) at instantiation time — don't list them
+# here.
+#
+# To override at launch:
+#   ++actor_rollout_ref.rollout.agent.agent_loop_config_path=configs/online_rl/agent.yaml
+
+- name: active_spatial_thor
+  _target_: tvrbench.online_rl.thor_agent_loop.ThorAgentLoop
+  max_turns: 30
+  response_length_per_turn: 32
+  env_pool_size: 8
+  env_config:
+    # Physical GPUs THOR Controllers can be spread across (round-robin).
+    # H200D: 5/8 GPUs hang in Unity Vulkan submit path — restrict to known-good
+    # GPUs [0, 2, 7]. On boxes where all GPUs work, comment this out and use
+    # `num_physical_gpus: N` instead.
+    gpu_devices: [0, 2, 7]
+    # num_physical_gpus: 8   # alternative: implicit range(N)
+    width: 640
+    height: 360
+    fov: 60
+    quality: Ultra
+    # PoliFormer-style reward — keep in sync with ThorViewEnvConfig defaults.
+    # Per-step: -step_penalty + format_valid_reward (or -format_invalid_penalty)
+    #         + progress_scale × Δd  (only on new min distance, no penalty for moving away)
+    # Terminal Stop: +success_reward at target, else -stop_fail_penalty
+    step_penalty: 0.01
+    format_valid_reward: 0.005
+    format_invalid_penalty: 0.01
+    progress_scale: 1.0
+    # 2026-05-19: scaled 10x down to align with Yu et al 2025 reward magnitude.
+    # Old (10/1) caused mode collapse: pg_loss dominated KL constraint at step 2.
+    success_reward: 1.0
+    stop_fail_penalty: 0.5
+    pose_rot_weight: 0.25
+    pose_hor_weight: 0.25
+    max_steps: 30
+    # ProcTHOR scenes (procthor_NNNNN) need house dicts from train.jsonl.gz.
+    # Path is relative to CWD at launch time (= ActiveSpatial repo root).
+    procthor_dir: data/procthor-10k

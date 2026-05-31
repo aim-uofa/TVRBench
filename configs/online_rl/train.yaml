@@ -1,0 +1,98 @@
+# Online RL train config — concat multi-turn GRPO from base Qwen3.5-9B.
+#
+# NOT a full hydra-composable config — verl 0.8.0 doesn't fully support that
+# pattern from outside its source tree. Instead this file documents the
+# settings we override via CLI flags in scripts/run_online_rl.sh. The launch
+# script is the source of truth; this file is a reference for humans.
+#
+# To actually launch:
+#   bash scripts/run_online_rl.sh
+#
+# Key choices (see project_online_rl_plan.md for rationale):
+#   - init: base Qwen3.5-9B (NOT sft_single)
+#   - concat multi-turn via custom thor_agent_loop
+#   - response_length=16384 (cutoff; concat accumulates env tokens)
+#   - image source 640×360 → ~220 visual tokens / image
+#   - 3-tier format reward ladder in env (weak 0.05 / medium 0.10 / strict 0.50)
+#     + Stop-at-target success bonus 1.0
+#   - rollout.mode=async (required for agent_loop wiring)
+
+reference_only: true
+
+algorithm:
+  adv_estimator: grpo
+  use_kl_in_reward: false
+
+data:
+  train_files: data/tasks/rl.json
+  val_files: data/tasks/eval.json
+  custom_cls:
+    path: tvrbench/online_rl/thor_dataset.py
+    name: ThorTaskDataset
+  train_batch_size: 32
+  max_prompt_length: 2048
+  max_response_length: 16384       # concat accumulates: ~500 tok / turn × 8 turns + assistant tokens, cushioned
+  apply_chat_template_kwargs:
+    enable_thinking: false         # base model — suppress chat-template `<think>` injection
+  return_raw_chat: true
+  return_multi_modal_inputs: true
+
+actor_rollout_ref:
+  model:
+    path: ${oc.env:MODEL_PATH}     # base Qwen3.5-9B path (set in launch script)
+    use_remove_padding: true
+    use_fused_kernels: true
+    enable_gradient_checkpointing: true
+
+  actor:
+    optim:
+      lr: 1e-6
+    ppo_mini_batch_size: 8
+    ppo_micro_batch_size_per_gpu: 2
+    use_kl_loss: true
+    kl_loss_coef: 0.01
+    kl_loss_type: low_var_kl
+    entropy_coeff: 0
+    grad_clip: 1.0
+    fsdp_config:
+      param_offload: false
+      optimizer_offload: false
+      wrap_policy:
+        transformer_layer_cls_to_wrap: [Qwen3_5DecoderLayer, Qwen3_5VisionBlock]
+
+  rollout:
+    name: vllm
+    mode: async                    # REQUIRED for agent_loop dispatch
+    tensor_model_parallel_size: 2
+    gpu_memory_utilization: 0.5
+    n: 8                            # group size for GRPO
+    temperature: 1.0                # base model exploration (was 0.9 for sft init)
+    top_p: 0.95
+    log_prob_micro_batch_size_per_gpu: 2
+    enforce_eager: true
+    free_cache_engine: true
+    enable_chunked_prefill: false
+    dtype: bfloat16
+    agent:
+      num_workers: 4
+      default_agent_loop: single_turn_agent   # fallback only — our dataset sets agent_name explicitly
+      agent_loop_config_path: configs/online_rl/agent.yaml
+
+  ref:
+    log_prob_micro_batch_size_per_gpu: 2
+    fsdp_config:
+      param_offload: true
+      wrap_policy:
+        transformer_layer_cls_to_wrap: [Qwen3_5DecoderLayer, Qwen3_5VisionBlock]
+
+trainer:
+  critic_warmup: 0
+  logger: [console, wandb]
+  val_before_train: false
+  n_gpus_per_node: 4
+  nnodes: 1
+  save_freq: 100
+  test_freq: 100
+  total_training_steps: 2000
+  project_name: active_spatial_online
+  experiment_name: qwen3_5_9b_base_online_concat
